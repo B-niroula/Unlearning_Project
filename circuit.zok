@@ -1,0 +1,265 @@
+
+import "utils/casts/u64_to_bits" as u64_to_bits
+import "utils/casts/u64_to_field" as u64_to_field
+from "./poseidon/poseidon" import poseidon_hash_2 as hash
+
+const u32 MAX_SAMPLES_D_PREV = 1
+const u32 MAX_SAMPLES_U_PREV = 1
+const u32 MAX_SAMPLES_D_PLUS = 1
+const u32 MAX_SAMPLES_D = 2
+const u64 PRECISION = 100000
+const u32 EPOCHS = 1
+const u64 LR = 1000
+const u32 NO_FEATURES = 6
+const u32 NO_WEIGHTS = 17
+const u32 NO_NEURONS = 2
+
+def hash_input(u64[NO_FEATURES] x, u64 y) -> field:
+    field h = hash(u64_to_field(y), u64_to_field(x[0]))
+    for u32 j in 1..NO_FEATURES do
+        h = hash(h, u64_to_field(x[j]))
+    endfor
+    return h
+
+def remove_shift(u64 input) -> u64:
+    return if u64_to_bits(input)[0] == true then  -1* ((-1 * input) / PRECISION ) else input / PRECISION fi
+const u64 W0 = 50000
+const u64 W1 = 15010
+const u64 W3 = 160
+def sigmoid(u64 x) -> u64:
+    return W0 + remove_shift(W1*x) - remove_shift(W3*remove_shift(remove_shift(x*x)*x))
+
+
+def main(public field h_D_prev, public field h_D, public field h_m, public field h_U_prev, public field h_U, private u32 no_samples_D_prev, private u64[MAX_SAMPLES_D_PREV][NO_FEATURES] D_prev_X, private u64[MAX_SAMPLES_D_PREV] D_prev_Y, private u32 no_samples_U_prev, private field[MAX_SAMPLES_U_PREV] H_U_prev, private u32 no_samples_D_plus, private u64[MAX_SAMPLES_D_PLUS][NO_FEATURES] D_plus_X, private u64[MAX_SAMPLES_D_PLUS] D_plus_Y) -> field:
+
+    // (a)
+    field[MAX_SAMPLES_D_PREV] H_D_prev = [0; MAX_SAMPLES_D_PREV]
+    for u32 i in 0..MAX_SAMPLES_D_PREV do
+        H_D_prev[i] = if i < no_samples_D_prev then hash_input(D_prev_X[i], D_prev_Y[i]) else 0 fi
+    endfor
+    
+    // (b)
+    field h_D_prev_prime = hash(0, 0)
+    for u32 i in 0..MAX_SAMPLES_D_PREV do
+        h_D_prev_prime = if i < no_samples_D_prev then hash(h_D_prev_prime, H_D_prev[i]) else h_D_prev_prime fi
+    endfor
+    assert(h_D_prev_prime == h_D_prev)
+
+    // (c)
+    field h_U_prev_prime = hash(0, 0)
+    for u32 i in 0..MAX_SAMPLES_U_PREV do
+        h_U_prev_prime = if i < no_samples_U_prev then hash(h_U_prev_prime, H_U_prev[i]) else h_U_prev_prime fi
+    endfor
+    assert(h_U_prev_prime == h_U_prev)
+
+    // (d)
+    field[MAX_SAMPLES_D_PLUS] H_D_plus = [0; MAX_SAMPLES_D_PLUS]
+    for u32 i in 0..MAX_SAMPLES_D_PLUS do
+        H_D_plus[i] = if i < no_samples_D_plus then hash_input(D_plus_X[i], D_plus_Y[i]) else 0 fi        
+    endfor
+
+    // (f)
+    field h_D_prime = h_D_prev
+    for u32 i in 0..MAX_SAMPLES_D_PLUS do
+        h_D_prime = if i < no_samples_D_plus then hash(h_D_prime, H_D_plus[i]) else h_D_prime fi
+    endfor
+    assert(h_D_prime == h_D)
+
+    // (g)
+    assert(h_U_prev == h_U)
+
+    // (h)
+    for u32 i in 0..MAX_SAMPLES_U_PREV do
+        for u32 j in 0..MAX_SAMPLES_D_PLUS do
+            field h_U_i = if i < no_samples_U_prev then H_U_prev[i] else 0 fi
+            field h_D_plus_j = if j < no_samples_D_plus then H_D_plus[j] else -1 fi
+            assert(h_U_i != h_D_plus_j)
+        endfor
+    endfor
+
+    // (j)
+    u64[6] w_0_0 = [-17801, 39042, 8805, -37340, -35865, -3210]
+    u64[6] w_0_1 = [-47791, 22727, 2438, 4493, -4362, 138]
+    u64[2] w_1_0 = [-10553, -34882]
+    u64[2] b_0 = [0, 0]
+    u64 b_1 = 0
+
+    for u32 epoch in 0..EPOCHS do
+        for u32 sample_idx in 0..MAX_SAMPLES_D_PREV do
+            // init accumulator
+            u64[NO_NEURONS] a_0 = [0; NO_NEURONS]
+            u64 a_1 = 0
+            u64[NO_NEURONS] z_0 = [0; NO_NEURONS]
+            u64 z_1 = 0
+            u64[NO_NEURONS] da_0 = [0; NO_NEURONS]
+            u64[NO_NEURONS] dz_0 = [0; NO_NEURONS]
+            u64 dz_1 = 0
+            u64[NO_FEATURES] dw_0_0 = [0; NO_FEATURES]
+            u64[NO_FEATURES] dw_0_1 = [0; NO_FEATURES]
+            u64[NO_NEURONS] dw_1_0 = [0; NO_NEURONS]
+            u64[NO_NEURONS] db_0 = [0; NO_NEURONS]
+            u64 db_1 = 0
+            
+
+            // get sample
+            u64[NO_FEATURES] x = D_prev_X[sample_idx]
+            u64 y = D_prev_Y[sample_idx]
+
+            // forward
+            // j-th neuron
+            z_0[0] = b_0[0]
+            for u32 i in 0..NO_FEATURES do
+                z_0[0] = z_0[0] + remove_shift(x[i]*w_0_0[i])
+            endfor
+            a_0[0] = sigmoid(z_0[0])
+            // j-th neuron
+            z_0[1] = b_0[1]
+            for u32 i in 0..NO_FEATURES do
+                z_0[1] = z_0[1] + remove_shift(x[i]*w_0_1[i])
+            endfor
+            a_0[1] = sigmoid(z_0[1])
+            // layer 1
+            z_1 = b_1
+            for u32 j in 0..NO_NEURONS do
+                z_1 = z_1 + remove_shift(a_0[j]*w_1_0[j])
+            endfor
+            a_1 = sigmoid(z_1)
+              
+
+            // backward
+            // layer 1
+            dz_1 = a_1 - y
+            for u32 i in 0..NO_NEURONS do
+                dw_1_0[i] = dw_1_0[i] + remove_shift(dz_1*a_0[i])
+            endfor
+            db_1 = db_1 + dz_1
+            // layer 0 
+            for u32 j in 0..NO_NEURONS do
+                da_0[j] = remove_shift(dz_1*w_1_0[j])
+            endfor
+            for u32 j in 0..NO_NEURONS do
+                dz_0[j] = remove_shift(da_0[j]*remove_shift(a_0[j]*(1-a_0[j])))
+            endfor
+                for u32 i in 0..NO_FEATURES do
+                    dw_0_0[i] = dw_0_0[i] + remove_shift(dz_0[0] * x[i])
+                endfor
+            db_0[0] = db_0[0] + dz_0[0]
+            
+                for u32 i in 0..NO_FEATURES do
+                    dw_0_1[i] = dw_0_1[i] + remove_shift(dz_0[1] * x[i])
+                endfor
+            db_0[1] = db_0[1] + dz_0[1]
+            
+            
+
+            // update
+            for u32 i in 0..NO_NEURONS do
+                w_1_0[i] = if sample_idx < no_samples_D_prev then w_1_0[i] - remove_shift(LR*dw_1_0[i]) else w_1_0[i] fi
+            endfor
+            b_1 = if sample_idx < no_samples_D_prev then b_1 - remove_shift(LR*db_1) else b_1 fi    
+            for u32 i in 0..NO_FEATURES do
+                w_0_0[i] = if sample_idx < no_samples_D_prev then w_0_0[i] - remove_shift(LR*dw_0_0[i]) else w_0_0[i] fi
+            endfor
+            b_0[0] = if sample_idx < no_samples_D_prev then b_0[0] - remove_shift(LR*db_0[0]) else b_0[0] fi
+                
+            for u32 i in 0..NO_FEATURES do
+                w_0_1[i] = if sample_idx < no_samples_D_prev then w_0_1[i] - remove_shift(LR*dw_0_1[i]) else w_0_1[i] fi
+            endfor
+            b_0[1] = if sample_idx < no_samples_D_prev then b_0[1] - remove_shift(LR*db_0[1]) else b_0[1] fi
+            
+            
+        endfor
+        for u32 sample_idx in 0..MAX_SAMPLES_D_PLUS do
+            // init accumulator
+            u64[NO_NEURONS] a_0 = [0; NO_NEURONS]
+            u64 a_1 = 0
+            u64[NO_NEURONS] z_0 = [0; NO_NEURONS]
+            u64 z_1 = 0
+            u64[NO_NEURONS] da_0 = [0; NO_NEURONS]
+            u64[NO_NEURONS] dz_0 = [0; NO_NEURONS]
+            u64 dz_1 = 0
+            u64[NO_FEATURES] dw_0_0 = [0; NO_FEATURES]
+            u64[NO_FEATURES] dw_0_1 = [0; NO_FEATURES]
+            u64[NO_NEURONS] dw_1_0 = [0; NO_NEURONS]
+            u64[NO_NEURONS] db_0 = [0; NO_NEURONS]
+            u64 db_1 = 0
+            
+
+            // get sample
+            u64[NO_FEATURES] x = D_plus_X[sample_idx]
+            u64 y = D_plus_Y[sample_idx]
+
+            // forward
+            // j-th neuron
+            z_0[0] = b_0[0]
+            for u32 i in 0..NO_FEATURES do
+                z_0[0] = z_0[0] + remove_shift(x[i]*w_0_0[i])
+            endfor
+            a_0[0] = sigmoid(z_0[0])
+            // j-th neuron
+            z_0[1] = b_0[1]
+            for u32 i in 0..NO_FEATURES do
+                z_0[1] = z_0[1] + remove_shift(x[i]*w_0_1[i])
+            endfor
+            a_0[1] = sigmoid(z_0[1])
+            // layer 1
+            z_1 = b_1
+            for u32 j in 0..NO_NEURONS do
+                z_1 = z_1 + remove_shift(a_0[j]*w_1_0[j])
+            endfor
+            a_1 = sigmoid(z_1)
+            
+
+            // backward
+            // layer 1
+            dz_1 = a_1 - y
+            for u32 i in 0..NO_NEURONS do
+                dw_1_0[i] = dw_1_0[i] + remove_shift(dz_1*a_0[i])
+            endfor
+            db_1 = db_1 + dz_1
+            // layer 0 
+            for u32 j in 0..NO_NEURONS do
+                da_0[j] = remove_shift(dz_1*w_1_0[j])
+            endfor
+            for u32 j in 0..NO_NEURONS do
+                dz_0[j] = remove_shift(da_0[j]*remove_shift(a_0[j]*(1-a_0[j])))
+            endfor
+                for u32 i in 0..NO_FEATURES do
+                    dw_0_0[i] = dw_0_0[i] + remove_shift(dz_0[0] * x[i])
+                endfor
+            db_0[0] = db_0[0] + dz_0[0]
+            
+                for u32 i in 0..NO_FEATURES do
+                    dw_0_1[i] = dw_0_1[i] + remove_shift(dz_0[1] * x[i])
+                endfor
+            db_0[1] = db_0[1] + dz_0[1]
+            
+            
+            // update
+            for u32 i in 0..NO_NEURONS do
+                w_1_0[i] = if sample_idx < no_samples_D_plus then w_1_0[i] - remove_shift(LR*dw_1_0[i]) else w_1_0[i] fi
+            endfor
+            b_1 = if sample_idx < no_samples_D_plus then b_1 - remove_shift(LR*db_1) else b_1 fi    
+            for u32 i in 0..NO_FEATURES do
+                w_0_0[i] = if sample_idx < no_samples_D_plus then w_0_0[i] - remove_shift(LR*dw_0_0[i]) else w_0_0[i] fi
+            endfor
+            b_0[0] = if sample_idx < no_samples_D_plus then b_0[0] - remove_shift(LR*db_0[0]) else b_0[0] fi
+                
+            for u32 i in 0..NO_FEATURES do
+                w_0_1[i] = if sample_idx < no_samples_D_plus then w_0_1[i] - remove_shift(LR*dw_0_1[i]) else w_0_1[i] fi
+            endfor
+            b_0[1] = if sample_idx < no_samples_D_plus then b_0[1] - remove_shift(LR*db_0[1]) else b_0[1] fi
+            
+            
+        endfor        
+    endfor
+    u64[NO_WEIGHTS] model = [ ...w_0_0, ...w_0_1,...b_0, ...w_1_0, b_1]
+    
+
+    field h_m_prime = hash(u64_to_field(model[0]), u64_to_field(model[1]))
+    for u32 i in 2..NO_WEIGHTS do
+        h_m_prime = hash(h_m_prime, u64_to_field(model[i]))
+    endfor
+    assert(h_m_prime == h_m)
+
+    return 1
