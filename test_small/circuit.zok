@@ -1,0 +1,152 @@
+
+import "utils/casts/u64_to_bits" as u64_to_bits
+import "utils/casts/u64_to_field" as u64_to_field
+from "./poseidon/poseidon" import poseidon_hash_2 as hash
+
+const u32 MAX_SAMPLES_D_PREV = 1
+const u32 MAX_SAMPLES_U_PREV = 1
+const u32 MAX_SAMPLES_D_PLUS = 5
+const u32 MAX_SAMPLES_D = 6
+const u64 PRECISION = 100000
+const u32 EPOCHS = 3
+const u64 LR = 1000
+const u32 NO_FEATURES = 5
+const u32 NO_WEIGHTS = 6
+const u32 NO_NEURONS = 0
+
+def hash_input(u64[NO_FEATURES] x, u64 y) -> field:
+    field h = hash(u64_to_field(y), u64_to_field(x[0]))
+    for u32 j in 1..NO_FEATURES do
+        h = hash(h, u64_to_field(x[j]))
+    endfor
+    return h
+
+def remove_shift(u64 input) -> u64:
+    return if u64_to_bits(input)[0] == true then  -1* ((-1 * input) / PRECISION ) else input / PRECISION fi
+
+def main(public field h_D_prev, public field h_D, public field h_m, public field h_U_prev, public field h_U, private u32 no_samples_D_prev, private u64[MAX_SAMPLES_D_PREV][NO_FEATURES] D_prev_X, private u64[MAX_SAMPLES_D_PREV] D_prev_Y, private u32 no_samples_U_prev, private field[MAX_SAMPLES_U_PREV] H_U_prev, private u32 no_samples_D_plus, private u64[MAX_SAMPLES_D_PLUS][NO_FEATURES] D_plus_X, private u64[MAX_SAMPLES_D_PLUS] D_plus_Y) -> field:
+
+    // (a)
+    field[MAX_SAMPLES_D_PREV] H_D_prev = [0; MAX_SAMPLES_D_PREV]
+    for u32 i in 0..MAX_SAMPLES_D_PREV do
+        H_D_prev[i] = if i < no_samples_D_prev then hash_input(D_prev_X[i], D_prev_Y[i]) else 0 fi
+    endfor
+    
+    // (b)
+    field h_D_prev_prime = hash(0, 0)
+    for u32 i in 0..MAX_SAMPLES_D_PREV do
+        h_D_prev_prime = if i < no_samples_D_prev then hash(h_D_prev_prime, H_D_prev[i]) else h_D_prev_prime fi
+    endfor
+    assert(h_D_prev_prime == h_D_prev)
+
+    // (c)
+    field h_U_prev_prime = hash(0, 0)
+    for u32 i in 0..MAX_SAMPLES_U_PREV do
+        h_U_prev_prime = if i < no_samples_U_prev then hash(h_U_prev_prime, H_U_prev[i]) else h_U_prev_prime fi
+    endfor
+    assert(h_U_prev_prime == h_U_prev)
+
+    // (d)
+    field[MAX_SAMPLES_D_PLUS] H_D_plus = [0; MAX_SAMPLES_D_PLUS]
+    for u32 i in 0..MAX_SAMPLES_D_PLUS do
+        H_D_plus[i] = if i < no_samples_D_plus then hash_input(D_plus_X[i], D_plus_Y[i]) else 0 fi        
+    endfor
+
+    // (f)
+    field h_D_prime = h_D_prev
+    for u32 i in 0..MAX_SAMPLES_D_PLUS do
+        h_D_prime = if i < no_samples_D_plus then hash(h_D_prime, H_D_plus[i]) else h_D_prime fi
+    endfor
+    assert(h_D_prime == h_D)
+
+    // (g)
+    assert(h_U_prev == h_U)
+
+    // (h)
+    for u32 i in 0..MAX_SAMPLES_U_PREV do
+        for u32 j in 0..MAX_SAMPLES_D_PLUS do
+            field h_U_i = if i < no_samples_U_prev then H_U_prev[i] else 0 fi
+            field h_D_plus_j = if j < no_samples_D_plus then H_D_plus[j] else -1 fi
+            assert(h_U_i != h_D_plus_j)
+        endfor
+    endfor
+
+    // (j)
+    u64[5] w = [-17801, 39042, 8805, -37340, -35865]
+	u64 b = 0
+
+    for u32 epoch in 0..EPOCHS do
+        for u32 sample_idx in 0..MAX_SAMPLES_D_PREV do
+            // init accumulator
+            u64[NO_FEATURES] dw = [0; NO_FEATURES]
+            u64 db = 0
+            
+
+            // get sample
+            u64[NO_FEATURES] x = D_prev_X[sample_idx]
+            u64 y = D_prev_Y[sample_idx]
+
+            // forward
+            u64 y_pred = b
+            for u32 i in 0..NO_FEATURES do
+                y_pred = y_pred + remove_shift(x[i]*w[i])
+            endfor
+              
+
+            // backward
+            u64 dy_pred = y_pred - y
+            for u32 i in 0..NO_FEATURES do
+                dw[i] = dw[i] + remove_shift(x[i]*dy_pred)
+            endfor
+            db = db + dy_pred
+            
+
+            // update
+            for u32 i in 0..NO_FEATURES do
+                w[i] = if sample_idx < no_samples_D_prev then w[i] - remove_shift(LR * dw[i]) else w[i] fi
+            endfor
+            b = if sample_idx < no_samples_D_prev then b - remove_shift(LR * db) else b fi
+            
+        endfor
+        for u32 sample_idx in 0..MAX_SAMPLES_D_PLUS do
+            // init accumulator
+            u64[NO_FEATURES] dw = [0; NO_FEATURES]
+            u64 db = 0
+            
+
+            // get sample
+            u64[NO_FEATURES] x = D_plus_X[sample_idx]
+            u64 y = D_plus_Y[sample_idx]
+
+            // forward
+            u64 y_pred = b
+            for u32 i in 0..NO_FEATURES do
+                y_pred = y_pred + remove_shift(x[i]*w[i])
+            endfor
+            
+
+            // backward
+            u64 dy_pred = y_pred - y
+            for u32 i in 0..NO_FEATURES do
+                dw[i] = dw[i] + remove_shift(x[i]*dy_pred)
+            endfor
+            db = db + dy_pred
+            
+            // update
+            for u32 i in 0..NO_FEATURES do
+                w[i] = if sample_idx < no_samples_D_plus then w[i] - remove_shift(LR * dw[i]) else w[i] fi
+            endfor
+            b = if sample_idx < no_samples_D_plus then b - remove_shift(LR * db) else b fi
+            
+        endfor        
+    endfor
+    u64[NO_WEIGHTS] model = [...w, b]
+    
+
+    field h_m_prime = hash(u64_to_field(model[0]), u64_to_field(model[1]))
+    for u32 i in 2..NO_WEIGHTS do
+        h_m_prime = hash(h_m_prime, u64_to_field(model[i]))
+    endfor
+    assert(h_m_prime == h_m)
+
+    return 1
