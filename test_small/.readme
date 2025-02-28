@@ -1,0 +1,9 @@
+--trial_name test_small \
+    --technique retraining --mode train \
+    --no_samples_D_prev 0 \
+    --no_samples_D_plus 5 \
+    --no_samples_U_prev 0 \
+    --no_samples_U_plus 0 \
+    --dataset_name synthetic_5 \
+    --classifier linear_regression \
+    --proof_system snark
