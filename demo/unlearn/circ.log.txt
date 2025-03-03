@@ -1,0 +1,30 @@
+
+[+] Compile circuit
+    took 1114 ms
+
+[+] Optimize circuit
+    took 3148 ms
+
+[+] Converting to R1CS
+    - pre-opt R1CS size: 157379
+    - final R1CS size: 96929
+    took 6599 ms
+
+[+] Get instance size
+    took 1401 ms
+    num_cons 96929
+    num_vars 156563
+    num_inputs 6
+    num_non_zero_entries 326984
+
+[+] Generate public parameters
+    took 20 ms
+
+[+] Setup total 12284 ms
+
+[+] Prove
+    took 3533 ms
+    proof size 29000
+
+[+] Verify
+    took 965 ms
